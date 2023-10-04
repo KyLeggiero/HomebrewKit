@@ -64,12 +64,12 @@ public final class ReadOnlyNetworkResource<Resource: Codable>: ObservableObject 
         self.updateQueue = DispatchQueue(label: "Update queue for \(ReadOnlyNetworkResource.self) \(id)")
         self.updateFeed = $latestUpdate.compactMap { loadable in
             switch loadable {
-            case .loadingButNoCache:
+            case .loadingButNoCache(errorSoFar: _),
+                    .failed(error: _):
                 return .none
                 
             case .cachedAndLoadingInTheBackground(cachedValue: let update, previousError: _),
-                    .loaded(value: let update):
-                
+                    .loaded(value: let update, lastError: _):
                 return .some(update)
             }
         }
@@ -202,16 +202,19 @@ private extension ReadOnlyNetworkResource {
     /// - Note: This sets the value using the main queue
     ///
     /// - Parameter error: The error describing why the resource could not be fetched
-    func setLatestUpdate(_ error: UpdateError) {
+    func setLatestUpdate(_ error: UpdateError) { // FIXME: no longer required?
         DispatchQueue.main.async {
             log(error: error)
             switch self.latestUpdate {
-            case .loadingButNoCache:
-                self.latestUpdate = .loaded(value: .failure(error))
-                
-            case .cachedAndLoadingInTheBackground(cachedValue: let previous, previousError: _),
-                    .loaded(value: let previous):
+            case .cachedAndLoadingInTheBackground(cachedValue: let previous, previousError: _):
                 self.latestUpdate = .cachedAndLoadingInTheBackground(cachedValue: previous, previousError: error)
+                
+            case .failed(error: _),
+                    .loadingButNoCache(errorSoFar: _):
+                self.latestUpdate = .failed(error: error)
+                
+            case .loaded(value: _, lastError: _):
+                self.latestUpdate = .failed(error: error)
             }
         }
     }
@@ -244,10 +247,12 @@ private extension ReadOnlyNetworkResource {
         if let delay = delay {
             log(verbose: "Delaying background update for \(delay) seconds")
             updateQueue.asyncAfter(deadline: DispatchTime.now() + delay, execute: updateNow)
+            log(verbose: "Update delay-enqueued")
         }
         else {
             log(verbose: "Enqueuing background update right now")
             updateQueue.async(execute: updateNow)
+            log(verbose: "Update enqueued")
         }
     }
 }
